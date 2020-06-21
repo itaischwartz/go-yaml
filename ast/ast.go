@@ -2,6 +2,7 @@ package ast
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -105,6 +106,7 @@ func (t NodeType) String() string {
 
 // Node type of node
 type Node interface {
+	io.Reader
 	// String node to text
 	String() string
 	// GetToken returns token instance
@@ -117,71 +119,10 @@ type Node interface {
 	SetComment(*token.Token) error
 	// Comment returns comment token instance
 	GetComment() *token.Token
-}
-
-// File contains all documents in YAML file
-type File struct {
-	Name string
-	Docs []*Document
-}
-
-// String all documents to text
-func (f *File) String() string {
-	docs := []string{}
-	for _, doc := range f.Docs {
-		docs = append(docs, doc.String())
-	}
-	return strings.Join(docs, "\n")
-}
-
-// Document type of Document
-type Document struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token // position of DocumentHeader ( `---` )
-	End     *token.Token // position of DocumentEnd ( `...` )
-	Body    Node
-}
-
-// GetToken returns token instance
-func (d *Document) GetToken() *token.Token {
-	return d.Body.GetToken()
-}
-
-// GetComment returns comment token instance
-func (d *Document) GetComment() *token.Token {
-	return d.Comment
-}
-
-// AddColumn add column number to child nodes recursively
-func (d *Document) AddColumn(col int) {
-	if d.Body != nil {
-		d.Body.AddColumn(col)
-	}
-}
-
-// SetComment set comment token
-func (d *Document) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	d.Comment = tk
-	return nil
-}
-
-// Type returns DocumentType
-func (d *Document) Type() NodeType { return DocumentType }
-
-// String document to text
-func (d *Document) String() string {
-	doc := []string{}
-	if d.Start != nil {
-		doc = append(doc, d.Start.Value)
-	}
-	doc = append(doc, d.Body.String())
-	if d.End != nil {
-		doc = append(doc, d.End.Value)
-	}
-	return strings.Join(doc, "\n")
+	// already read length
+	readLen() int
+	// append read length
+	addReadLen(int)
 }
 
 // ScalarNode type for scalar node
@@ -190,10 +131,60 @@ type ScalarNode interface {
 	GetValue() interface{}
 }
 
+type BaseNode struct {
+	Comment *token.Token
+	read    int
+}
+
+func (n *BaseNode) readLen() int {
+	return n.read
+}
+
+func (n *BaseNode) addReadLen(len int) {
+	n.read += len
+}
+
+// GetComment returns comment token instance
+func (n *BaseNode) GetComment() *token.Token {
+	return n.Comment
+}
+
+// SetComment set comment token
+func (n *BaseNode) SetComment(tk *token.Token) error {
+	if tk.Type != token.CommentType {
+		return ErrInvalidTokenType
+	}
+	n.Comment = tk
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func readNode(p []byte, node Node) (int, error) {
+	s := node.String()
+	readLen := node.readLen()
+	remain := len(s) - readLen
+	if remain == 0 {
+		return 0, io.EOF
+	}
+	size := min(remain, len(p))
+	for idx, b := range s[readLen : readLen+size] {
+		p[idx] = byte(b)
+	}
+	node.addReadLen(size)
+	return size, nil
+}
+
 // Null create node for null value
 func Null(tk *token.Token) Node {
 	return &NullNode{
-		Token: tk,
+		BaseNode: &BaseNode{},
+		Token:    tk,
 	}
 }
 
@@ -201,13 +192,10 @@ func Null(tk *token.Token) Node {
 func Bool(tk *token.Token) Node {
 	b, _ := strconv.ParseBool(tk.Value)
 	return &BoolNode{
-		Token: tk,
-		Value: b,
+		BaseNode: &BaseNode{},
+		Token:    tk,
+		Value:    b,
 	}
-}
-
-func removeUnderScoreFromNumber(num string) string {
-	return strings.ReplaceAll(num, "_", "")
 }
 
 // Integer create node for integer value
@@ -224,10 +212,18 @@ func Integer(tk *token.Token) Node {
 		}
 		if len(negativePrefix) > 0 {
 			i, _ := strconv.ParseInt(negativePrefix+value[skipCharacterNum:], 2, 64)
-			return &IntegerNode{Token: tk, Value: i}
+			return &IntegerNode{
+				BaseNode: &BaseNode{},
+				Token:    tk,
+				Value:    i,
+			}
 		}
 		i, _ := strconv.ParseUint(negativePrefix+value[skipCharacterNum:], 2, 64)
-		return &IntegerNode{Token: tk, Value: i}
+		return &IntegerNode{
+			BaseNode: &BaseNode{},
+			Token:    tk,
+			Value:    i,
+		}
 	case token.OctetIntegerType:
 		// octet token starts with '0o' or '-0o' or '0' or '-0'
 		skipCharacterNum := 1
@@ -245,10 +241,18 @@ func Integer(tk *token.Token) Node {
 		}
 		if len(negativePrefix) > 0 {
 			i, _ := strconv.ParseInt(negativePrefix+value[skipCharacterNum:], 8, 64)
-			return &IntegerNode{Token: tk, Value: i}
+			return &IntegerNode{
+				BaseNode: &BaseNode{},
+				Token:    tk,
+				Value:    i,
+			}
 		}
 		i, _ := strconv.ParseUint(value[skipCharacterNum:], 8, 64)
-		return &IntegerNode{Token: tk, Value: i}
+		return &IntegerNode{
+			BaseNode: &BaseNode{},
+			Token:    tk,
+			Value:    i,
+		}
 	case token.HexIntegerType:
 		// hex token starts with '0x' or '-0x'
 		skipCharacterNum := 2
@@ -259,32 +263,50 @@ func Integer(tk *token.Token) Node {
 		}
 		if len(negativePrefix) > 0 {
 			i, _ := strconv.ParseInt(negativePrefix+value[skipCharacterNum:], 16, 64)
-			return &IntegerNode{Token: tk, Value: i}
+			return &IntegerNode{
+				BaseNode: &BaseNode{},
+				Token:    tk,
+				Value:    i,
+			}
 		}
 		i, _ := strconv.ParseUint(value[skipCharacterNum:], 16, 64)
-		return &IntegerNode{Token: tk, Value: i}
+		return &IntegerNode{
+			BaseNode: &BaseNode{},
+			Token:    tk,
+			Value:    i,
+		}
 	}
 	if value[0] == '-' || value[0] == '+' {
 		i, _ := strconv.ParseInt(value, 10, 64)
-		return &IntegerNode{Token: tk, Value: i}
+		return &IntegerNode{
+			BaseNode: &BaseNode{},
+			Token:    tk,
+			Value:    i,
+		}
 	}
 	i, _ := strconv.ParseUint(value, 10, 64)
-	return &IntegerNode{Token: tk, Value: i}
+	return &IntegerNode{
+		BaseNode: &BaseNode{},
+		Token:    tk,
+		Value:    i,
+	}
 }
 
 // Float create node for float value
 func Float(tk *token.Token) Node {
 	f, _ := strconv.ParseFloat(removeUnderScoreFromNumber(tk.Value), 64)
 	return &FloatNode{
-		Token: tk,
-		Value: f,
+		BaseNode: &BaseNode{},
+		Token:    tk,
+		Value:    f,
 	}
 }
 
 // Infinity create node for .inf or -.inf value
-func Infinity(tk *token.Token) Node {
+func Infinity(tk *token.Token) *InfinityNode {
 	node := &InfinityNode{
-		Token: tk,
+		BaseNode: &BaseNode{},
+		Token:    tk,
 	}
 	switch tk.Value {
 	case ".inf", ".Inf", ".INF":
@@ -296,53 +318,194 @@ func Infinity(tk *token.Token) Node {
 }
 
 // Nan create node for .nan value
-func Nan(tk *token.Token) Node {
-	return &NanNode{Token: tk}
+func Nan(tk *token.Token) *NanNode {
+	return &NanNode{
+		BaseNode: &BaseNode{},
+		Token:    tk,
+	}
 }
 
 // String create node for string value
-func String(tk *token.Token) Node {
+func String(tk *token.Token) *StringNode {
 	return &StringNode{
-		Token: tk,
-		Value: tk.Value,
+		BaseNode: &BaseNode{},
+		Token:    tk,
+		Value:    tk.Value,
 	}
 }
 
 // Comment create node for comment
-func Comment(tk *token.Token) Node {
-	return &CommentNode{Comment: tk}
+func Comment(tk *token.Token) *CommentNode {
+	return &CommentNode{
+		BaseNode: &BaseNode{Comment: tk},
+	}
 }
 
 // MergeKey create node for merge key ( << )
-func MergeKey(tk *token.Token) Node {
+func MergeKey(tk *token.Token) *MergeKeyNode {
 	return &MergeKeyNode{
-		Token: tk,
+		BaseNode: &BaseNode{},
+		Token:    tk,
 	}
 }
 
 // Mapping create node for map
-func Mapping(tk *token.Token, isFlowStyle bool) *MappingNode {
-	return &MappingNode{
+func Mapping(tk *token.Token, isFlowStyle bool, values ...*MappingValueNode) *MappingNode {
+	node := &MappingNode{
+		BaseNode:    &BaseNode{},
 		Start:       tk,
 		IsFlowStyle: isFlowStyle,
 		Values:      []*MappingValueNode{},
+	}
+	node.Values = append(node.Values, values...)
+	return node
+}
+
+// MappingValue create node for mapping value
+func MappingValue(tk *token.Token, key Node, value Node) *MappingValueNode {
+	return &MappingValueNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+		Key:      key,
+		Value:    value,
 	}
 }
 
 // Sequence create node for sequence
 func Sequence(tk *token.Token, isFlowStyle bool) *SequenceNode {
 	return &SequenceNode{
+		BaseNode:    &BaseNode{},
 		Start:       tk,
 		IsFlowStyle: isFlowStyle,
 		Values:      []Node{},
 	}
 }
 
+func Anchor(tk *token.Token) *AnchorNode {
+	return &AnchorNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+	}
+}
+
+func Alias(tk *token.Token) *AliasNode {
+	return &AliasNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+	}
+}
+
+func Document(tk *token.Token, body Node) *DocumentNode {
+	return &DocumentNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+		Body:     body,
+	}
+}
+
+func Directive(tk *token.Token) *DirectiveNode {
+	return &DirectiveNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+	}
+}
+
+func Literal(tk *token.Token) *LiteralNode {
+	return &LiteralNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+	}
+}
+
+func Tag(tk *token.Token) *TagNode {
+	return &TagNode{
+		BaseNode: &BaseNode{},
+		Start:    tk,
+	}
+}
+
+// File contains all documents in YAML file
+type File struct {
+	Name string
+	Docs []*DocumentNode
+}
+
+// Read implements (io.Reader).Read
+func (f *File) Read(p []byte) (int, error) {
+	for _, doc := range f.Docs {
+		n, err := doc.Read(p)
+		if err == io.EOF {
+			continue
+		}
+		return n, nil
+	}
+	return 0, io.EOF
+}
+
+// String all documents to text
+func (f *File) String() string {
+	docs := []string{}
+	for _, doc := range f.Docs {
+		docs = append(docs, doc.String())
+	}
+	return strings.Join(docs, "\n")
+}
+
+// DocumentNode type of Document
+type DocumentNode struct {
+	*BaseNode
+	Start *token.Token // position of DocumentHeader ( `---` )
+	End   *token.Token // position of DocumentEnd ( `...` )
+	Body  Node
+}
+
+// Read implements (io.Reader).Read
+func (d *DocumentNode) Read(p []byte) (int, error) {
+	return readNode(p, d)
+}
+
+// Type returns DocumentNodeType
+func (d *DocumentNode) Type() NodeType { return DocumentType }
+
+// GetToken returns token instance
+func (d *DocumentNode) GetToken() *token.Token {
+	return d.Body.GetToken()
+}
+
+// AddColumn add column number to child nodes recursively
+func (d *DocumentNode) AddColumn(col int) {
+	if d.Body != nil {
+		d.Body.AddColumn(col)
+	}
+}
+
+// String document to text
+func (d *DocumentNode) String() string {
+	doc := []string{}
+	if d.Start != nil {
+		doc = append(doc, d.Start.Value)
+	}
+	doc = append(doc, d.Body.String())
+	if d.End != nil {
+		doc = append(doc, d.End.Value)
+	}
+	return strings.Join(doc, "\n")
+}
+
+func removeUnderScoreFromNumber(num string) string {
+	return strings.ReplaceAll(num, "_", "")
+}
+
 // NullNode type of null node
 type NullNode struct {
-	ScalarNode
+	*BaseNode
 	Comment *token.Token // position of Comment ( `#comment` )
 	Token   *token.Token
+}
+
+// Read implements (io.Reader).Read
+func (n *NullNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns NullType
@@ -351,11 +514,6 @@ func (n *NullNode) Type() NodeType { return NullType }
 // GetToken returns token instance
 func (n *NullNode) GetToken() *token.Token {
 	return n.Token
-}
-
-// GetComment returns comment token instance
-func (n *NullNode) GetComment() *token.Token {
-	return n.Comment
 }
 
 // AddColumn add column number to child nodes recursively
@@ -384,10 +542,14 @@ func (n *NullNode) String() string {
 
 // IntegerNode type of integer node
 type IntegerNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
-	Value   interface{} // int64 or uint64 value
+	*BaseNode
+	Token *token.Token
+	Value interface{} // int64 or uint64 value
+}
+
+// Read implements (io.Reader).Read
+func (n *IntegerNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns IntegerType
@@ -398,23 +560,9 @@ func (n *IntegerNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *IntegerNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *IntegerNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *IntegerNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns int64 value
@@ -429,11 +577,15 @@ func (n *IntegerNode) String() string {
 
 // FloatNode type of float node
 type FloatNode struct {
-	ScalarNode
-	Comment   *token.Token // position of Comment ( `#comment` )
+	*BaseNode
 	Token     *token.Token
 	Precision int
 	Value     float64
+}
+
+// Read implements (io.Reader).Read
+func (n *FloatNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns FloatType
@@ -444,23 +596,9 @@ func (n *FloatNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *FloatNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *FloatNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *FloatNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns float64 value
@@ -475,10 +613,14 @@ func (n *FloatNode) String() string {
 
 // StringNode type of string node
 type StringNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
-	Value   string
+	*BaseNode
+	Token *token.Token
+	Value string
+}
+
+// Read implements (io.Reader).Read
+func (n *StringNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns StringType
@@ -489,23 +631,9 @@ func (n *StringNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *StringNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *StringNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *StringNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns string value
@@ -542,10 +670,14 @@ func (n *StringNode) String() string {
 
 // LiteralNode type of literal node
 type LiteralNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Value   *StringNode
+	*BaseNode
+	Start *token.Token
+	Value *StringNode
+}
+
+// Read implements (io.Reader).Read
+func (n *LiteralNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns LiteralType
@@ -556,26 +688,12 @@ func (n *LiteralNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *LiteralNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *LiteralNode) AddColumn(col int) {
 	n.Start.AddColumn(col)
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *LiteralNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns string value
@@ -591,9 +709,13 @@ func (n *LiteralNode) String() string {
 
 // MergeKeyNode type of merge key node
 type MergeKeyNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
+	*BaseNode
+	Token *token.Token
+}
+
+// Read implements (io.Reader).Read
+func (n *MergeKeyNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns MergeKeyType
@@ -602,11 +724,6 @@ func (n *MergeKeyNode) Type() NodeType { return MergeKeyType }
 // GetToken returns token instance
 func (n *MergeKeyNode) GetToken() *token.Token {
 	return n.Token
-}
-
-// GetComment returns comment token instance
-func (n *MergeKeyNode) GetComment() *token.Token {
-	return n.Comment
 }
 
 // GetValue returns '<<' value
@@ -624,21 +741,16 @@ func (n *MergeKeyNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
 }
 
-// SetComment set comment token
-func (n *MergeKeyNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
-}
-
 // BoolNode type of boolean node
 type BoolNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
-	Value   bool
+	*BaseNode
+	Token *token.Token
+	Value bool
+}
+
+// Read implements (io.Reader).Read
+func (n *BoolNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns BoolType
@@ -649,23 +761,9 @@ func (n *BoolNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *BoolNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *BoolNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *BoolNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns boolean value
@@ -680,10 +778,14 @@ func (n *BoolNode) String() string {
 
 // InfinityNode type of infinity node
 type InfinityNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
-	Value   float64
+	*BaseNode
+	Token *token.Token
+	Value float64
+}
+
+// Read implements (io.Reader).Read
+func (n *InfinityNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns InfinityType
@@ -694,23 +796,9 @@ func (n *InfinityNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *InfinityNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *InfinityNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *InfinityNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns math.Inf(0) or math.Inf(-1)
@@ -725,9 +813,13 @@ func (n *InfinityNode) String() string {
 
 // NanNode type of nan node
 type NanNode struct {
-	ScalarNode
-	Comment *token.Token // position of Comment ( `#comment` )
-	Token   *token.Token
+	*BaseNode
+	Token *token.Token
+}
+
+// Read implements (io.Reader).Read
+func (n *NanNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns NanType
@@ -738,23 +830,9 @@ func (n *NanNode) GetToken() *token.Token {
 	return n.Token
 }
 
-// GetComment returns comment token instance
-func (n *NanNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *NanNode) AddColumn(col int) {
 	n.Token.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *NanNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // GetValue returns math.NaN()
@@ -802,11 +880,16 @@ func (m *MapNodeIter) Value() Node {
 
 // MappingNode type of mapping node
 type MappingNode struct {
-	Comment     *token.Token // position of Comment ( `#comment` )
+	*BaseNode
 	Start       *token.Token
 	End         *token.Token
 	IsFlowStyle bool
 	Values      []*MappingValueNode
+}
+
+// Read implements (io.Reader).Read
+func (n *MappingNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns MappingType
@@ -817,11 +900,6 @@ func (n *MappingNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *MappingNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *MappingNode) AddColumn(col int) {
 	n.Start.AddColumn(col)
@@ -829,15 +907,6 @@ func (n *MappingNode) AddColumn(col int) {
 	for _, value := range n.Values {
 		value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *MappingNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 func (n *MappingNode) flowStyleString() string {
@@ -880,10 +949,15 @@ func (n *MappingNode) MapRange() *MapNodeIter {
 
 // MappingValueNode type of mapping value
 type MappingValueNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Key     Node
-	Value   Node
+	*BaseNode
+	Start *token.Token
+	Key   Node
+	Value Node
+}
+
+// Read implements (io.Reader).Read
+func (n *MappingValueNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns MappingValueType
@@ -892,11 +966,6 @@ func (n *MappingValueNode) Type() NodeType { return MappingValueType }
 // GetToken returns token instance
 func (n *MappingValueNode) GetToken() *token.Token {
 	return n.Start
-}
-
-// GetComment returns comment token instance
-func (n *MappingValueNode) GetComment() *token.Token {
-	return n.Comment
 }
 
 // AddColumn add column number to child nodes recursively
@@ -908,15 +977,6 @@ func (n *MappingValueNode) AddColumn(col int) {
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *MappingValueNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String mapping value to text
@@ -979,11 +1039,16 @@ func (m *ArrayNodeIter) Len() int {
 
 // SequenceNode type of sequence node
 type SequenceNode struct {
-	Comment     *token.Token // position of Comment ( `#comment` )
+	*BaseNode
 	Start       *token.Token
 	End         *token.Token
 	IsFlowStyle bool
 	Values      []Node
+}
+
+// Read implements (io.Reader).Read
+func (n *SequenceNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns SequenceType
@@ -994,11 +1059,6 @@ func (n *SequenceNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *SequenceNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *SequenceNode) AddColumn(col int) {
 	n.Start.AddColumn(col)
@@ -1006,15 +1066,6 @@ func (n *SequenceNode) AddColumn(col int) {
 	for _, value := range n.Values {
 		value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *SequenceNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 func (n *SequenceNode) flowStyleString() string {
@@ -1067,10 +1118,15 @@ func (n *SequenceNode) ArrayRange() *ArrayNodeIter {
 
 // AnchorNode type of anchor node
 type AnchorNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Name    Node
-	Value   Node
+	*BaseNode
+	Start *token.Token
+	Name  Node
+	Value Node
+}
+
+// Read implements (io.Reader).Read
+func (n *AnchorNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns AnchorType
@@ -1079,11 +1135,6 @@ func (n *AnchorNode) Type() NodeType { return AnchorType }
 // GetToken returns token instance
 func (n *AnchorNode) GetToken() *token.Token {
 	return n.Start
-}
-
-// GetComment returns comment token instance
-func (n *AnchorNode) GetComment() *token.Token {
-	return n.Comment
 }
 
 // AddColumn add column number to child nodes recursively
@@ -1095,15 +1146,6 @@ func (n *AnchorNode) AddColumn(col int) {
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *AnchorNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String anchor to text
@@ -1121,9 +1163,14 @@ func (n *AnchorNode) String() string {
 
 // AliasNode type of alias node
 type AliasNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Value   Node
+	*BaseNode
+	Start *token.Token
+	Value Node
+}
+
+// Read implements (io.Reader).Read
+func (n *AliasNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns AliasType
@@ -1134,26 +1181,12 @@ func (n *AliasNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *AliasNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *AliasNode) AddColumn(col int) {
 	n.Start.AddColumn(col)
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *AliasNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String alias to text
@@ -1163,9 +1196,14 @@ func (n *AliasNode) String() string {
 
 // DirectiveNode type of directive node
 type DirectiveNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Value   Node
+	*BaseNode
+	Start *token.Token
+	Value Node
+}
+
+// Read implements (io.Reader).Read
+func (n *DirectiveNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns DirectiveType
@@ -1176,25 +1214,11 @@ func (n *DirectiveNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *DirectiveNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *DirectiveNode) AddColumn(col int) {
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *DirectiveNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String directive to text
@@ -1204,9 +1228,14 @@ func (n *DirectiveNode) String() string {
 
 // TagNode type of tag node
 type TagNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
-	Start   *token.Token
-	Value   Node
+	*BaseNode
+	Start *token.Token
+	Value Node
+}
+
+// Read implements (io.Reader).Read
+func (n *TagNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns TagType
@@ -1217,26 +1246,12 @@ func (n *TagNode) GetToken() *token.Token {
 	return n.Start
 }
 
-// GetComment returns comment token instance
-func (n *TagNode) GetComment() *token.Token {
-	return n.Comment
-}
-
 // AddColumn add column number to child nodes recursively
 func (n *TagNode) AddColumn(col int) {
 	n.Start.AddColumn(col)
 	if n.Value != nil {
 		n.Value.AddColumn(col)
 	}
-}
-
-// SetComment set comment token
-func (n *TagNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String tag to text
@@ -1246,7 +1261,12 @@ func (n *TagNode) String() string {
 
 // CommentNode type of comment node
 type CommentNode struct {
-	Comment *token.Token // position of Comment ( `#comment` )
+	*BaseNode
+}
+
+// Read implements (io.Reader).Read
+func (n *CommentNode) Read(p []byte) (int, error) {
+	return readNode(p, n)
 }
 
 // Type returns TagType
@@ -1255,21 +1275,9 @@ func (n *CommentNode) Type() NodeType { return CommentType }
 // GetToken returns token instance
 func (n *CommentNode) GetToken() *token.Token { return n.Comment }
 
-// GetComment returns comment token instance
-func (n *CommentNode) GetComment() *token.Token { return n.Comment }
-
 // AddColumn add column number to child nodes recursively
 func (n *CommentNode) AddColumn(col int) {
 	n.Comment.AddColumn(col)
-}
-
-// SetComment set comment token
-func (n *CommentNode) SetComment(tk *token.Token) error {
-	if tk.Type != token.CommentType {
-		return ErrInvalidTokenType
-	}
-	n.Comment = tk
-	return nil
 }
 
 // String comment to text

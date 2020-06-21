@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/parser"
 	"golang.org/x/xerrors"
 )
 
@@ -2067,5 +2068,29 @@ func TestDecoder_TabCharacterAtRight(t *testing.T) {
 	}
 	if len(v[0]) != 3 {
 		t.Fatalf("failed to unmarshal %+v", v)
+	}
+}
+
+func TestDecoder_DecodeFromFile(t *testing.T) {
+	yml := `
+a: b
+c: d
+`
+	file, err := parser.ParseBytes([]byte(yml), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]string
+	if err := yaml.NewDecoder(file).Decode(&v); err != nil {
+		t.Fatal(err)
+	}
+	if len(v) != 2 {
+		t.Fatal("failed to decode from ast.File")
+	}
+	if v["a"] != "b" {
+		t.Fatal("failed to decode from ast.File")
+	}
+	if v["c"] != "d" {
+		t.Fatal("failed to decode from ast.File")
 	}
 }
