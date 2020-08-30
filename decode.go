@@ -37,6 +37,7 @@ type Decoder struct {
 	disallowUnknownField bool
 	disallowDuplicateKey bool
 	useOrderedMap        bool
+	returnMultiError     bool
 	parsedFile           *ast.File
 	streamIndex          int
 }
@@ -56,6 +57,7 @@ func NewDecoder(r io.Reader, opts ...DecodeOption) *Decoder {
 		disallowUnknownField: false,
 		disallowDuplicateKey: false,
 		useOrderedMap:        false,
+		returnMultiError:     false,
 	}
 }
 
@@ -940,6 +942,7 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 	}
 
 	if d.validator != nil {
+		var validationErrors error
 		if err := d.validator.Struct(dst.Interface()); err != nil {
 			ev := reflect.ValueOf(err)
 			if ev.Type().Kind() == reflect.Slice {
@@ -964,6 +967,9 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 						validationErrors = multierror.Append(validationErrors, err)
 					}
 				}
+			}
+			if validationErrors != nil {
+				return validationErrors
 			}
 		}
 	}
