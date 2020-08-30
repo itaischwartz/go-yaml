@@ -18,6 +18,7 @@ import (
 	"github.com/goccy/go-yaml/internal/errors"
 	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
+	"github.com/hashicorp/go-multierror"
 	"golang.org/x/xerrors"
 )
 
@@ -36,6 +37,7 @@ type Decoder struct {
 	disallowUnknownField bool
 	disallowDuplicateKey bool
 	useOrderedMap        bool
+	returnMultiError     bool
 	parsedFile           *ast.File
 	streamIndex          int
 }
@@ -55,6 +57,7 @@ func NewDecoder(r io.Reader, opts ...DecodeOption) *Decoder {
 		disallowUnknownField: false,
 		disallowDuplicateKey: false,
 		useOrderedMap:        false,
+		returnMultiError:     false,
 	}
 }
 
@@ -939,6 +942,7 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 	}
 
 	if d.validator != nil {
+		var validationErrors error
 		if err := d.validator.Struct(dst.Interface()); err != nil {
 			ev := reflect.ValueOf(err)
 			if ev.Type().Kind() == reflect.Slice {
@@ -955,9 +959,17 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 					node, exists := keyToNodeMap[structField.RenderName]
 					if exists {
 						// TODO: to make FieldError message cutomizable
-						return errors.ErrSyntax(fmt.Sprintf("%s", err), node.GetToken())
+
+						err := errors.ErrSyntax(fmt.Sprintf("%s", err), node.GetToken())
+						if !d.returnMultiError {
+							return err
+						}
+						validationErrors = multierror.Append(validationErrors, err)
 					}
 				}
+			}
+			if validationErrors != nil {
+				return validationErrors
 			}
 		}
 	}
