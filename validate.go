@@ -10,4 +10,5 @@ type StructValidator interface {
 // ( see https://godoc.org/gopkg.in/go-playground/validator.v9#FieldError )
 type FieldError interface {
 	StructField() string
+	Error() string
 }

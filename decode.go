@@ -18,6 +18,7 @@ import (
 	"github.com/goccy/go-yaml/internal/errors"
 	"github.com/goccy/go-yaml/parser"
 	"github.com/goccy/go-yaml/token"
+	"github.com/hashicorp/go-multierror"
 	"golang.org/x/xerrors"
 )
 
@@ -955,7 +956,12 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 					node, exists := keyToNodeMap[structField.RenderName]
 					if exists {
 						// TODO: to make FieldError message cutomizable
-						return errors.ErrSyntax(fmt.Sprintf("%s", err), node.GetToken())
+
+						err := errors.ErrSyntax(fmt.Sprintf("%s", fieldErr.Error()), node.GetToken())
+						if !d.returnMultiError {
+							return err
+						}
+						validationErrors = multierror.Append(validationErrors, err)
 					}
 				}
 			}

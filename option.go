@@ -85,6 +85,13 @@ func UseOrderedMap() DecodeOption {
 	}
 }
 
+func ReturnMultiError() DecodeOption {
+	return func(d *Decoder) error {
+		d.returnMultiError = true
+		return nil
+	}
+}
+
 // EncodeOption functional option type for Encoder
 type EncodeOption func(e *Encoder) error
 
