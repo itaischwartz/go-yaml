@@ -85,7 +85,7 @@ func UseOrderedMap() DecodeOption {
 	}
 }
 
-func ReturnMutliError() DecodeOption {
+func ReturnMultiError() DecodeOption {
 	return func(d *Decoder) error {
 		d.returnMultiError = true
 		return nil

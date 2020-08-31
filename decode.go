@@ -960,7 +960,7 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 					if exists {
 						// TODO: to make FieldError message cutomizable
 
-						err := errors.ErrSyntax(fmt.Sprintf("%s", err), node.GetToken())
+						err := errors.ErrSyntax(fmt.Sprintf("%s", fieldErr.Error()), node.GetToken())
 						if !d.returnMultiError {
 							return err
 						}
