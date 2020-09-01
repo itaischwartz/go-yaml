@@ -935,14 +935,14 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 		return errors.Wrapf(foundErr, "failed to decode value")
 	}
 
+	var validationErrors error
 	if len(unknownFields) != 0 && d.disallowUnknownField {
 		for key, node := range unknownFields {
-			return errUnknownField(fmt.Sprintf(`unknown field "%s"`, key), node.GetToken())
+			multierror.Append(validationErrors, errUnknownField(fmt.Sprintf(`unknown field "%s"`, key), node.GetToken()))
 		}
 	}
 
 	if d.validator != nil {
-		var validationErrors error
 		if err := d.validator.Struct(dst.Interface()); err != nil {
 			ev := reflect.ValueOf(err)
 			if ev.Type().Kind() == reflect.Slice {
@@ -968,12 +968,9 @@ func (d *Decoder) decodeStruct(dst reflect.Value, src ast.Node) error {
 					}
 				}
 			}
-			if validationErrors != nil {
-				return validationErrors
-			}
 		}
 	}
-	return nil
+	return validationErrors
 }
 
 func (d *Decoder) decodeArray(dst reflect.Value, src ast.Node) error {
@@ -1353,7 +1350,6 @@ func (d *Decoder) decode(v reflect.Value) error {
 
 // Decode reads the next YAML-encoded value from its input
 // and stores it in the value pointed to by v.
-//
 //
 // See the documentation for Unmarshal for details about the
 // conversion of YAML into a Go value.
