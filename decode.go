@@ -1354,6 +1354,7 @@ func (d *Decoder) decode(v reflect.Value) error {
 // Decode reads the next YAML-encoded value from its input
 // and stores it in the value pointed to by v.
 //
+//
 // See the documentation for Unmarshal for details about the
 // conversion of YAML into a Go value.
 func (d *Decoder) Decode(v interface{}) error {
